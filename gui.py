@@ -5,7 +5,7 @@ from PyQt6.QtCore import pyqtSignal, QThread, Qt
 
 from memory import MemoryManager
 from brain import Brain
-from voice import VoiceManager
+from voice import VoiceManager, QtVoiceWorker
 
 class LLMWorker(QThread):
     finished = pyqtSignal(str)
@@ -19,17 +19,6 @@ class LLMWorker(QThread):
         # We use stream=False for simpler integration with TTS and GUI currently
         response = self.brain.process_message(self.user_text, stream=False)
         self.finished.emit(response)
-
-class VoiceWorker(QThread):
-    finished = pyqtSignal(str)
-
-    def __init__(self, voice_manager):
-        super().__init__()
-        self.voice_manager = voice_manager
-
-    def run(self):
-        recognized_text = self.voice_manager.listen()
-        self.finished.emit(recognized_text)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -137,9 +126,12 @@ class MainWindow(QMainWindow):
         self.voice_button.setText("Listening...")
         self.input_field.setPlaceholderText("Listening to your voice...")
 
-        self.voice_worker = VoiceWorker(self.voice_manager)
+        # Use our new native Qt Multimedia Voice Worker
+        self.voice_worker = QtVoiceWorker()
         self.voice_worker.finished.connect(self.on_voice_finished)
-        self.voice_worker.start()
+
+        # Important: this operates entirely via Qt Signals rather than QThread blocks.
+        self.voice_worker.start_listening()
 
     def on_voice_finished(self, recognized_text):
         self.voice_button.setText("🎤 Voice")

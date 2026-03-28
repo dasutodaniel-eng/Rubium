@@ -3,5 +3,3 @@ pytest
 PyQt6
 SpeechRecognition
 pyttsx3
-sounddevice
-numpy

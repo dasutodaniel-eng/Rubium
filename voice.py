@@ -1,75 +1,99 @@
-import speech_recognition as sr
-import pyttsx3
 import threading
-import sounddevice as sd
-import numpy as np
+import pyttsx3
+import speech_recognition as sr
+from PyQt6.QtCore import QObject, pyqtSignal, QByteArray, QIODevice, QBuffer
+from PyQt6.QtMultimedia import QAudioSource, QMediaFormat, QAudioFormat, QAudioDevice
+from PyQt6.QtMultimedia import QMediaDevices
 import time
 
-class SoundDeviceMicrophone(sr.AudioSource):
-    """
-    A custom Microphone class for SpeechRecognition that uses sounddevice instead of pyaudio.
-    """
-    def __init__(self, device_index=None, sample_rate=16000, chunk_size=1024):
-        self.device_index = device_index
-        self.format = np.int16  # 16-bit int
-        self.SAMPLE_WIDTH = 2  # size in bytes of format
-        self.SAMPLE_RATE = sample_rate
-        self.CHUNK = chunk_size
-        self.audio = None
-        self.stream = None
+class QtVoiceWorker(QObject):
+    finished = pyqtSignal(str)
 
-    def __enter__(self):
-        try:
-            self.audio = sd.InputStream(
-                device=self.device_index,
-                channels=1,
-                samplerate=self.SAMPLE_RATE,
-                dtype=self.format,
-                blocksize=self.CHUNK
-            )
-            self.audio.start()
-        except Exception as e:
-            raise sr.RequestError(f"Failed to open sounddevice stream: {e}")
+    def __init__(self):
+        super().__init__()
+        self.recognizer = sr.Recognizer()
+        self.audio_source = None
+        self.buffer = QBuffer()
 
-        # Monkey patch the stream object to support a `read` method which SpeechRecognition expects
-        class StreamAdapter:
-            def __init__(self, sd_stream):
-                self.sd_stream = sd_stream
-            def read(self, chunk_size, exception_on_overflow=False):
+        # Configure Audio Format for Speech Recognition (16kHz, 16-bit, Mono)
+        self.format = QAudioFormat()
+        self.format.setSampleRate(16000)
+        self.format.setChannelCount(1)
+        self.format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+
+    def start_listening(self):
+        default_device = QMediaDevices.defaultAudioInput()
+        if not default_device.isNull():
+            if not default_device.isFormatSupported(self.format):
+                print("Default format not natively supported by hardware. Qt will attempt software conversion.")
+
+            self.audio_source = QAudioSource(default_device, self.format, self)
+
+            # Use QBuffer to store audio data
+            self.buffer = QBuffer()
+            self.buffer.open(QIODevice.OpenModeFlag.ReadWrite)
+
+            print("Listening (QtMultimedia)...")
+            self.audio_source.start(self.buffer)
+
+            # Listen for 5 seconds total (simple approach without silence detection for now)
+            # You can tweak the delay below if you want it longer
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(4000, self.stop_listening)
+        else:
+            print("No audio input device found.")
+            self.finished.emit("")
+
+    def stop_listening(self):
+        if self.audio_source:
+            self.audio_source.stop()
+            print("Recognizing...")
+
+            # Get the raw PCM bytes
+            self.buffer.seek(0)
+
+            # readAll() returns a QByteArray. We must cast it to Python bytes
+            # otherwise SpeechRecognition will throw an AssertionError.
+            audio_bytes = bytes(self.buffer.readAll())
+
+            if not audio_bytes:
+                print("No audio data captured.")
+                self.finished.emit("")
+                return
+
+            # Convert raw bytes to SpeechRecognition AudioData
+            # sample_width = 2 (16-bit)
+            audio_data = sr.AudioData(audio_bytes, self.format.sampleRate(), 2)
+
+            def recognize_worker():
                 try:
-                    data, overflow = self.sd_stream.read(chunk_size)
-                    # Convert the NumPy array to bytes
-                    return data.tobytes()
-                except sd.PortAudioError:
-                    # Provide empty bytes to keep SpeechRecognition from crashing
-                    return b'\x00' * (chunk_size * 2)
+                    text = self.recognizer.recognize_google(audio_data, language="ru-RU")
+                    self.finished.emit(text)
+                except sr.UnknownValueError:
+                    print("Could not understand audio.")
+                    self.finished.emit("")
+                except sr.RequestError as e:
+                    print(f"Speech recognition service error: {e}")
+                    self.finished.emit("")
+                except Exception as e:
+                    print(f"Unexpected recognition error: {e}")
+                    self.finished.emit("")
 
-        self.stream = StreamAdapter(self.audio)
-        return self
+            threading.Thread(target=recognize_worker, daemon=True).start()
+        else:
+            self.finished.emit("")
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        if self.audio is not None:
-            self.audio.stop()
-            self.audio.close()
-            self.stream = None
-            self.audio = None
 
 class VoiceManager:
     def __init__(self):
-        # Initialize Text-to-Speech engine
         self.tts_engine = pyttsx3.init()
-        # Ensure we use a decent voice if available
         voices = self.tts_engine.getProperty('voices')
         for voice in voices:
             if 'ru' in voice.id.lower() or 'russian' in voice.name.lower():
                 self.tts_engine.setProperty('voice', voice.id)
                 break
 
-        # Initialize Speech-to-Text recognizer
-        self.recognizer = sr.Recognizer()
-
     def speak(self, text):
-        """Speaks the given text asynchronously."""
         def run_tts():
             engine = pyttsx3.init()
             voices = engine.getProperty('voices')
@@ -82,28 +106,7 @@ class VoiceManager:
 
         threading.Thread(target=run_tts, daemon=True).start()
 
-    def listen(self, timeout=5, phrase_time_limit=10):
-        """Listens to the microphone using sounddevice and returns recognized text."""
-        try:
-            # Use our custom SoundDeviceMicrophone instead of sr.Microphone()
-            with SoundDeviceMicrophone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=1)
-                print("Listening...")
-                audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
-
-            print("Recognizing...")
-            text = self.recognizer.recognize_google(audio, language="ru-RU")
-            return text
-
-        except sr.WaitTimeoutError:
-            print("Microphone timed out waiting for speech.")
-            return ""
-        except sr.UnknownValueError:
-            print("Google Speech Recognition could not understand audio")
-            return ""
-        except sr.RequestError as e:
-            print(f"Error accessing microphone or internet: {e}")
-            return ""
-        except Exception as e:
-            print(f"Microphone access error: {e}")
-            return ""
+    def listen(self):
+        # We no longer use this blocking `listen` method in GUI.
+        # The GUI should use QtVoiceWorker asynchronously.
+        pass
