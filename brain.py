@@ -1,6 +1,15 @@
 import openai
 import anthropic
-import google.generativeai as genai
+
+# Google Generative AI (Gemini) uses protobufs which currently fail on Python 3.14+
+try:
+    import google.generativeai as genai
+    GOOGLE_AVAILABLE = True
+except ImportError:
+    GOOGLE_AVAILABLE = False
+except TypeError:
+    # Python 3.14+ metaclass TypeError during protobuf import
+    GOOGLE_AVAILABLE = False
 
 class Brain:
     def __init__(self, memory_manager):
@@ -23,6 +32,8 @@ class Brain:
             self.client = anthropic.Anthropic(api_key=self.api_key)
             self.model = "claude-3-haiku-20240307"
         elif self.provider == "google":
+            if not GOOGLE_AVAILABLE:
+                raise RuntimeError("Google Gemini is not supported on this version of Python. Please use OpenAI/Anthropic/DeepSeek or downgrade to Python 3.12.")
             genai.configure(api_key=self.api_key)
             # system prompt instruction in gemini works best in the model config
             self.model = "gemini-1.5-flash"
