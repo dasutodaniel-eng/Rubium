@@ -49,6 +49,14 @@ class Brain:
             return full_reply
 
         except Exception as e:
-            error_msg = f"\nError communicating with Ollama: {e}"
-            print(error_msg)
+            err_str = str(e)
+            if "503" in err_str:
+                error_msg = (
+                    "Ollama is returning a 503 error. This usually means the model "
+                    "is still loading into RAM/VRAM, or your system does not have enough "
+                    "memory to run it. Please wait a few moments and try again."
+                )
+            else:
+                error_msg = f"Error communicating with Ollama: {err_str}"
+            print(f"\n{error_msg}")
             return error_msg
