@@ -3,6 +3,7 @@ import pyttsx3
 import threading
 import sounddevice as sd
 import numpy as np
+import time
 
 class SoundDeviceMicrophone(sr.AudioSource):
     """
@@ -18,23 +19,30 @@ class SoundDeviceMicrophone(sr.AudioSource):
         self.stream = None
 
     def __enter__(self):
-        self.audio = sd.InputStream(
-            device=self.device_index,
-            channels=1,
-            samplerate=self.SAMPLE_RATE,
-            dtype=self.format,
-            blocksize=self.CHUNK
-        )
-        self.stream = self.audio.start()
+        try:
+            self.audio = sd.InputStream(
+                device=self.device_index,
+                channels=1,
+                samplerate=self.SAMPLE_RATE,
+                dtype=self.format,
+                blocksize=self.CHUNK
+            )
+            self.audio.start()
+        except Exception as e:
+            raise sr.RequestError(f"Failed to open sounddevice stream: {e}")
 
         # Monkey patch the stream object to support a `read` method which SpeechRecognition expects
         class StreamAdapter:
             def __init__(self, sd_stream):
                 self.sd_stream = sd_stream
             def read(self, chunk_size, exception_on_overflow=False):
-                data, overflow = self.sd_stream.read(chunk_size)
-                # Convert the NumPy array to bytes
-                return data.tobytes()
+                try:
+                    data, overflow = self.sd_stream.read(chunk_size)
+                    # Convert the NumPy array to bytes
+                    return data.tobytes()
+                except sd.PortAudioError:
+                    # Provide empty bytes to keep SpeechRecognition from crashing
+                    return b'\x00' * (chunk_size * 2)
 
         self.stream = StreamAdapter(self.audio)
         return self
@@ -88,12 +96,13 @@ class VoiceManager:
             return text
 
         except sr.WaitTimeoutError:
+            print("Microphone timed out waiting for speech.")
             return ""
         except sr.UnknownValueError:
             print("Google Speech Recognition could not understand audio")
             return ""
         except sr.RequestError as e:
-            print(f"Could not request results from Google Speech Recognition service; {e}")
+            print(f"Error accessing microphone or internet: {e}")
             return ""
         except Exception as e:
             print(f"Microphone access error: {e}")
