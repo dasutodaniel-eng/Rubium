@@ -1,4 +1,6 @@
-ollama
+openai
+google-generativeai
+anthropic
 pytest
 PyQt6
 SpeechRecognition

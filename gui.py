@@ -1,11 +1,50 @@
 import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QTextEdit, QLineEdit, QPushButton, QInputDialog, QMessageBox)
+                             QHBoxLayout, QTextEdit, QLineEdit, QPushButton, QInputDialog, QMessageBox,
+                             QDialog, QLabel, QComboBox, QFormLayout)
 from PyQt6.QtCore import pyqtSignal, QThread, Qt
 
 from memory import MemoryManager
 from brain import Brain
 from voice import VoiceManager, QtVoiceWorker
+
+class SetupDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Symbiote Setup")
+        self.setFixedSize(400, 250)
+
+        layout = QFormLayout()
+
+        # Assistant Name
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("e.g. Jarvis, Friday, Cortana")
+        layout.addRow("Assistant Name:", self.name_input)
+
+        # Provider Dropdown
+        self.provider_dropdown = QComboBox()
+        self.provider_dropdown.addItems(["OpenAI", "DeepSeek", "Anthropic", "Google"])
+        layout.addRow("AI Provider:", self.provider_dropdown)
+
+        # API Key
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setPlaceholderText("Enter API Key")
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addRow("API Key:", self.api_key_input)
+
+        # Submit Button
+        self.submit_btn = QPushButton("Start Symbiote")
+        self.submit_btn.clicked.connect(self.accept)
+        layout.addRow("", self.submit_btn)
+
+        self.setLayout(layout)
+
+    def get_data(self):
+        return {
+            "assistant_name": self.name_input.text().strip() or "Jarvis",
+            "provider": self.provider_dropdown.currentText().lower(),
+            "api_key": self.api_key_input.text().strip()
+        }
 
 class LLMWorker(QThread):
     finished = pyqtSignal(str)
@@ -21,17 +60,15 @@ class LLMWorker(QThread):
         self.finished.emit(response)
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, config_data):
         super().__init__()
 
-        self.memory_manager = MemoryManager()
-        self.brain = Brain(self.memory_manager, model="gemma2:2b")
-        self.voice_manager = VoiceManager()
+        self.assistant_name = config_data.get("assistant_name", "Jarvis")
 
-        # Determine the name
-        self.assistant_name = self.prompt_for_name()
-        if not self.assistant_name:
-            self.assistant_name = "Jarvis" # Fallback
+        # Re-initialize Brain with the new config that was saved earlier
+        self.memory_manager = MemoryManager()
+        self.brain = Brain(self.memory_manager)
+        self.voice_manager = VoiceManager()
 
         system_prompt = (
             f"You are a highly advanced AI Symbiote and personal assistant named {self.assistant_name}. "
@@ -41,7 +78,7 @@ class MainWindow(QMainWindow):
         self.brain.set_system_prompt(system_prompt)
 
         self.setWindowTitle(f"{self.assistant_name} - AI Symbiote")
-        self.resize(600, 500)
+        self.resize(700, 600)
 
         # Main Widget and Layout
         central_widget = QWidget()
@@ -78,24 +115,25 @@ class MainWindow(QMainWindow):
 
         self.load_history_to_display()
 
-    def prompt_for_name(self):
-        name, ok = QInputDialog.getText(self, "Assistant Name", "What would you like to call your assistant?")
-        if ok and name.strip():
-            return name.strip()
-        return None
-
     def load_history_to_display(self):
         history = self.memory_manager.load_history()
         for msg in history:
             role = msg.get("role")
             content = msg.get("content")
             if role == "user":
-                self.chat_display.append(f"<b>You:</b> {content}")
+                self.append_chat("You", content)
             elif role == "assistant":
-                self.chat_display.append(f"<b>{self.assistant_name}:</b> {content}")
+                self.append_chat(self.assistant_name, content)
 
     def append_chat(self, speaker, text):
-        self.chat_display.append(f"<b>{speaker}:</b> {text}")
+        # Apply custom HTML styling depending on whether the speaker is the user or assistant
+        if speaker == "You":
+            color = "#4DA6FF" # Light blue for user
+        else:
+            color = "#00E676" # Neon green for assistant
+
+        styled_message = f'<span style="color: {color}; font-size: 14px;"><b>{speaker}:</b></span><br><span style="color: #FFFFFF; font-size: 14px;">{text}</span><br>'
+        self.chat_display.append(styled_message)
 
     def send_message(self, user_text=None):
         if not user_text:
@@ -161,18 +199,3 @@ class MainWindow(QMainWindow):
         self.send_button.setEnabled(enabled)
         self.voice_button.setEnabled(enabled)
         self.clear_button.setEnabled(enabled)
-
-def run_app():
-    # Needed for environments that might not have a display (e.g., CI/CD tests)
-    import os
-    if not os.environ.get("DISPLAY"):
-        print("No DISPLAY found, GUI cannot start.")
-        return
-
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
-
-if __name__ == "__main__":
-    run_app()

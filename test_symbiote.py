@@ -33,7 +33,9 @@ def test_memory_manager_add_and_clear(temp_memory_dir):
 
 def test_brain_set_system_prompt(temp_memory_dir):
     manager = MemoryManager(memory_dir=temp_memory_dir)
-    brain = Brain(manager, model="test_model")
+    # mock config so Brain doesn't crash needing an API key
+    manager.save_config({"provider": "openai", "api_key": "test_key"})
+    brain = Brain(manager)
 
     brain.set_system_prompt("You are a test AI.")
     history = manager.load_history()
@@ -47,25 +49,39 @@ def test_brain_set_system_prompt(temp_memory_dir):
     assert len(history) == 1
     assert history[0]["content"] == "You are an updated test AI."
 
-# Mock Ollama response for testing Brain processing without actually hitting Ollama
-class MockOllamaResponse:
-    def __iter__(self):
-        yield {'message': {'content': 'This '}}
-        yield {'message': {'content': 'is '}}
-        yield {'message': {'content': 'a test.'}}
+class MockMessage:
+    def __init__(self, content):
+        self.content = content
 
-def mock_chat(*args, **kwargs):
-    return MockOllamaResponse()
+class MockChoice:
+    def __init__(self, content):
+        self.message = MockMessage(content)
+
+class MockOpenAIResponse:
+    def __init__(self):
+        self.choices = [MockChoice("This is a test.")]
 
 def test_brain_process_message(temp_memory_dir, monkeypatch):
-    import ollama
-    monkeypatch.setattr(ollama, 'chat', mock_chat)
-
     manager = MemoryManager(memory_dir=temp_memory_dir)
-    brain = Brain(manager, model="test_model")
+    manager.save_config({"provider": "openai", "api_key": "test_key"})
 
-    # Process a message
-    reply = brain.process_message("Test message")
+    # Mock the OpenAI client creation
+    class MockOpenAIClient:
+        class Chat:
+            class Completions:
+                @staticmethod
+                def create(*args, **kwargs):
+                    return MockOpenAIResponse()
+            completions = Completions()
+        chat = Chat()
+
+    import openai
+    monkeypatch.setattr(openai, "OpenAI", lambda *args, **kwargs: MockOpenAIClient())
+
+    brain = Brain(manager)
+
+    # Process a message (stream=False)
+    reply = brain.process_message("Test message", stream=False)
     assert reply == "This is a test."
 
     history = manager.load_history()
