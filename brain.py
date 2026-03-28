@@ -19,7 +19,7 @@ class Brain:
             history[0]["content"] = system_prompt
             self.memory_manager.save_history(history)
 
-    def process_message(self, user_input):
+    def process_message(self, user_input, stream=True):
         """Processes the user input through the LLM using conversational history."""
         # 1. Add user message to memory
         self.memory_manager.add_message("user", user_input)
@@ -29,15 +29,19 @@ class Brain:
 
         # 3. Stream the response from the local LLM
         try:
-            response = ollama.chat(model=self.model, messages=messages, stream=True)
+            if stream:
+                response = ollama.chat(model=self.model, messages=messages, stream=True)
 
-            full_reply = ""
-            for chunk in response:
-                content = chunk['message']['content']
-                print(content, end='', flush=True)
-                full_reply += content
+                full_reply = ""
+                for chunk in response:
+                    content = chunk['message']['content']
+                    print(content, end='', flush=True)
+                    full_reply += content
 
-            print() # Print a newline at the end of the streaming response
+                print() # Print a newline at the end of the streaming response
+            else:
+                response = ollama.chat(model=self.model, messages=messages, stream=False)
+                full_reply = response['message']['content']
 
             # 4. Save the assistant's final reply to memory
             self.memory_manager.add_message("assistant", full_reply)
